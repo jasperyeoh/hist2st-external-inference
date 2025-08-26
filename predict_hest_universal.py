@@ -311,7 +311,8 @@ def predict_sample(sample_id, config):
     logger.info(f"Saved predictions to: {pred_file}")
     
     # 保存相关性结果
-    corr_file = os.path.join(predictions_dir, "correlation_results.npy")
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    corr_file = os.path.join(predictions_dir, f"{sample_id}_correlation_{ts}.npy")
     np.save(corr_file, {
         'gene_pearson': np.array(gene_r),
         'spot_spearman': np.array(spot_r),
