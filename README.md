@@ -1,95 +1,123 @@
-# Spatial Transcriptomics Prediction from Histology jointly through Transformer and Graph Neural Networks
-### Yuansong Zeng, Zhuoyi Wei, Weijiang Yu, Rui Yin,  Bingling Li, Zhonghui Tang, Yutong Lu, Yuedong Yang*
+# Hist2ST: Spatial Transcriptomics Prediction from Histology
 
+Transformer + GNN model to predict spatial gene expression from H&E histology.
+Original project authors: Yuansong Zeng, Zhuoyi Wei, Weijiang Yu, Rui Yin, Bingling Li, Zhonghui Tang, Yutong Lu, Yuedong Yang.
 
- Here, we have developed Hist2ST, a deep learning-based model using histology images to predict RNA-seq expression.
-  At each sequenced spot, the corre-sponding histology image is cropped into an image patch, from which 2D vision 
-  features are learned through convolutional operations. Meanwhile, the spatial relations with the whole image and
-   neighbored patches are captured through Transformer and graph neural network modules, respectively. These learned
-    features are then used to predict the gene expression by following the zero-inflated negative binomial (ZINB) distribution.
-     To alleviate the impact by the small spatial transcriptomics data, a self-distillation mechanism is employed for efficient
-      learning of the model. Hist2ST was tested on the HER2-positive breast cancer and the cutaneous squamous cell carcinoma datasets, 
-      and shown to outperform existing methods in terms of both gene expression prediction and following spatial region identification.
-       
+This repository adds a robust, universal pipeline to run zero-shot inference on external HEST data and a complete downstream analysis workflow.
 
+## Overview
 
-![(Variational) gcn](Workflow.png)
+- **Model**: Hist2ST combines CNN/Transformer for global context and GNN for local spatial structure; predicts gene expression (ZINB/NB heads).
+- **Our contribution**: A universal, sample-agnostic inference + analysis pipeline for HEST data with clean outputs and shell wrappers.
+- **Upstream usage**: Training/tutorial notebooks from the original repo are kept for reference.
 
+## Quick Start (External HEST Inference)
 
+```bash
+# 1) Ensure data + model are present
+#    data/hest_data/st/{SAMPLE_ID}.h5ad
+#    data/hest_data/wsis/{SAMPLE_ID}.tif
+#    model/5-Hist2ST.ckpt
 
-# Usage
+# 2) Make scripts executable (first time only)
+chmod +x run_prediction.sh run_analysis.sh
+
+# 3) Run prediction and analysis
+./run_prediction.sh MEND159
+./run_analysis.sh MEND159
+```
+
+## Input layout
+
+```
+data/hest_data/
+├── st/{SAMPLE_ID}.h5ad          # counts + spatial
+└── wsis/{SAMPLE_ID}.tif         # H&E fallback image
+
+model/
+└── 5-Hist2ST.ckpt               # pretrained weights
+```
+
+Optional gene list: `data/her_hvg_cut_1000.npy` (first 785 used if present).
+
+## Output layout
+
+```
+output/{SAMPLE_ID}/
+├── predictions/
+│   ├── {SAMPLE_ID}_pred.h5ad         # 785-gene predictions
+│   └── correlation_results.npy       # Pearson/Spearman + overlap genes
+├── analysis/
+│   ├── {SAMPLE_ID}_analyzed.h5ad     # processed AnnData
+│   ├── clustering_results.csv
+│   └── marker_genes.csv
+├── visualizations/                   # UMAP/t-SNE/spatial plots
+└── logs/                             # pipeline logs
+```
+
+## Commands and scripts
+
+- `run_prediction.sh SAMPLE_ID` — shell wrapper for inference
+- `run_analysis.sh SAMPLE_ID` — shell wrapper for downstream analysis
+- `predict_hest_universal.py` — universal prediction (loads .h5ad + .tif, builds KNN graph, runs Hist2ST)
+- `analyze_hest_universal.py` — QC, HVG, PCA/UMAP/t-SNE, clustering, DE, spatial plots
+
+Advanced (Python flags):
+```bash
+python predict_hest_universal.py SAMPLE_ID \
+  --device auto --data_dir data/hest_data --output_dir output
+```
+
+## Technical notes
+
+- Config: `5-7-2-8-4-16-32`, `n_genes=785`, dropout=0.2
+- Weights: loaded with `strict=False` to allow partial compatibility
+- Graph: `k=6`; dynamically switches `pruneTag` (Grid/NA) by coordinate range
+- Coordinates: normalized to integer indices (0–63) for embeddings
+- Seeds fixed (12000) for reproducibility
+
+## Minimal model usage (reference)
+
 ```python
 import torch
 from HIST2ST import Hist2ST
 
-model = Hist2ST(
-    depth1=2, depth2=8, depth3=4,
-    n_genes=785, learning_rate=1e-5,
-    kernel_size=5, patch_size=7, fig_size=112,
-    heads=16, channel=32, dropout=0.2,
-    zinb=0.25, nb=False,
-    bake=5, lamb=0.5, 
-    policy='mean', 
-)
-
-# patches: [N, 3, W, H]
-# coordinates: [N, 2]
-# adjacency: [N, N]
-pred_expression = model(patches, coordinates,adjacency)  # [N, n_genes]
-
+model = Hist2ST(depth1=2, depth2=8, depth3=4,
+                n_genes=785, kernel_size=5, patch_size=7,
+                heads=16, channel=32, dropout=0.2,
+                zinb=0.25, nb=False, bake=5, lamb=0.5)
+# patches: [B, N, 3, H, W]
+# coords:  [B, N, 2] (long indices 0..63)
+# adj:     [N, N]
+# out:     [B, N, n_genes]
 ```
 
-Note: the detailed parameters instructions please see [HIST2ST_train](https://github.com/biomed-AI/Hist2ST/blob/main/HIST2ST_train.py)
+## Requirements
 
+- Python >= 3.7, PyTorch >= 1.10, pytorch-lightning >= 1.4, scanpy >= 1.8, scipy, PIL, tqdm
 
-## System environment
-Required package:
-- PyTorch >= 1.10
-- pytorch-lightning >= 1.4
-- scanpy >= 1.8
-- python >=3.7
-- tensorboard
+## Troubleshooting
 
+- "Pre-trained model not found": put `5-Hist2ST.ckpt` under `model/`
+- "No overlapping genes": confirm `.npy` gene list or remove it to use dataset genes
+- Very low correlations: expected in zero-shot cross-dataset; predictions can still be useful
+- PIL DecompressionBombWarning: safe for large WSIs
 
-# Hist2ST pipeline
+## Datasets (upstream)
 
-See [tutorial.ipynb](tutorial.ipynb)
+- HER2+ breast tumor ST: `https://github.com/almaan/her2st`
+- cSCC 10x Visium (GSE144240)
+- Synapse mirror of trained models and data indices (see upstream paper)
 
+## Citation (upstream)
 
-NOTE: Run the following command if you want to run the script tutorial.ipynb
- 
-1.  Please run the script `download.sh` in the folder [data](https://github.com/biomed-AI/Hist2ST/tree/main/data) 
-
-or 
-
-Run the command line `git clone https://github.com/almaan/her2st.git` in the dir [data](https://github.com/biomed-AI/Hist2ST/tree/main/data) 
-
-2. Run `gunzip *.gz` in the dir `Hist2ST/data/her2st/data/ST-cnts/` to unzip the gz files
-
-
-# Datasets
-
- -  human HER2-positive breast tumor ST data https://github.com/almaan/her2st/.
- -  human cutaneous squamous cell carcinoma 10x Visium data (GSE144240).
- -  you can also download all datasets from [here](https://www.synapse.org/#!Synapse:syn29738084/files/)
-
-
-# Trained models
-All Trained models of our method on HER2+ and cSCC datasets can be found at [synapse](https://www.synapse.org/#!Synapse:syn29738084/files/)
-
-
-# Citation
-
-Please cite our paper:
-
+Please cite the original authors:
 ```
-
 @article{zengys,
   title={Spatial Transcriptomics Prediction from Histology jointly through Transformer and Graph Neural Networks},
-  author={ Yuansong Zeng, Zhuoyi Wei, Weijiang Yu, Rui Yin,  Bingling Li, Zhonghui Tang, Yutong Lu, Yuedong Yang},
-  journal={biorxiv},
-  year={2021}
- publisher={Cold Spring Harbor Laboratory}
+  author={Yuansong Zeng and Zhuoyi Wei and Weijiang Yu and Rui Yin and Bingling Li and Zhonghui Tang and Yutong Lu and Yuedong Yang},
+  journal={bioRxiv},
+  year={2021},
+  publisher={Cold Spring Harbor Laboratory}
 }
-
 ```
